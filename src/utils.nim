@@ -1,23 +1,40 @@
-import std/[strutils, strformat, enumutils, macros, typetraits]
+import std/[strutils, strformat, enumutils, typetraits, macros, os]
 
 import chroma
 import niprefs
+import stopwatch
 import stb_image/read as stbi
 import nimgl/[imgui, glfw, opengl]
 
 export enumutils
 
 type
+  SwState* = enum
+    Running
+    Stopped
+    Paused
+
   App* = ref object
     win*: GLFWWindow
     font*: ptr ImFont
+    bigFont*: ptr ImFont
     prefs*: Prefs
     config*: PObjectType # Prefs table
     cache*: PObjectType # Settings cache
 
     # Variables
-    somefloat*: float32
-    counter*: int
+    sw*: Stopwatch
+    swState*: SwState
+    startBtnText*: string
+    lapBtnText*: string
+
+    time*: array[3, int32] # For the timer
+    timeMs*: int # time in milliseconds for countback
+    timer*: Stopwatch
+    timerState*: SwState
+
+    currentZone*: int32
+    filter*: ImGuiTextFilter
 
   SettingTypes* = enum
     Input # Input text
@@ -114,6 +131,8 @@ proc igVec2*(x, y: float32): ImVec2 = ImVec2(x: x, y: y)
 
 proc igVec4*(x, y, z, w: float32): ImVec4 = ImVec4(x: x, y: y, z: z, w: w)
 
+proc igVec4*(color: Color): ImVec4 = ImVec4(x: color.r, y: color.g, z: color.b, w: color.a)
+
 proc initGLFWImage*(data: ImageData): GLFWImage = 
   result = GLFWImage(pixels: cast[ptr cuchar](data.image[0].unsafeAddr), width: int32 data.width, height: int32 data.height)
 
@@ -146,3 +165,120 @@ proc igHelpMarker*(text: string) =
     igTextUnformatted(text)
     igPopTextWrapPos()
     igEndTooltip()
+
+proc newImFontConfig*(mergeMode = false): ImFontConfig =
+  result.fontDataOwnedByAtlas = true
+  result.fontNo = 0
+  result.oversampleH = 3
+  result.oversampleV = 1
+  result.pixelSnapH = true
+  result.glyphMaxAdvanceX = float.high
+  result.rasterizerMultiply = 1.0
+  result.mergeMode = mergeMode
+
+proc formatTime*(ms: int64, includeMs: bool = true): string = 
+  let
+    days = ms div (1000 * 60 * 60 * 24)
+    hours = (ms div (1000 * 60 * 60)) mod 24
+    minutes = (ms div (1000 * 60)) mod 60
+    seconds = (ms div 1000) mod 60
+    milliseconds = (ms div 10) mod 100 # Rest of milliseconds
+
+  if days > 0:
+    result = &"{days:02} {hours:02}:{minutes:02}:{seconds:02}"
+  else:
+    result = &"{hours:02}:{minutes:02}:{seconds:02}"
+
+  if includeMs:
+    result.add &".{milliseconds:02}"
+
+proc centerCursorX*(width: float32, align: float = 0.5f) = 
+  var avail: ImVec2
+
+  igGetContentRegionAvailNonUDT(avail.addr)
+  
+  let off = (avail.x - width) * align
+  
+  if off > 0:
+    igSetCursorPosX(igGetCursorPosX() + off)
+
+proc centerCursorY*(height: float32, align: float = 0.5f) = 
+  var avail: ImVec2
+
+  igGetContentRegionAvailNonUDT(avail.addr)
+  
+  let off = (avail.y - height) * align
+  
+  if off > 0:
+    igSetCursorPosY(igGetCursorPosY() + off)
+
+proc centerCursor*(size: ImVec2, alignX: float = 0.5f, alignY: float = 0.5f) = 
+  centerCursorX(size.x, alignX)
+  centerCursorY(size.y, alignY)
+
+proc igCalcTextSize*(text: cstring, text_end: cstring = nil, hide_text_after_double_hash: bool = false, wrap_width: float32 = -1.0'f32): ImVec2 = 
+  igCalcTextSizeNonUDT(result.addr, text, text_end, hide_text_after_double_hash, wrap_width)
+
+proc myParseInt*(s: string): int = 
+  var s = s.replace("\x00", "")
+
+  if s.len == 0: return 0
+
+  try:
+    if s[0] == '-':
+      result = -s[1..s.high].parseInt()
+    else:
+      if '-' in s:
+        s = s.replace("-", "")
+      result = s.parseInt()
+  except ValueError:
+    result = 0  
+
+proc vInputInt*(label: cstring, val: var int32, step: int32 = 1, min: int32 = 0, max: int32 = 1024) = 
+  var
+    buf = intToStr(val, ($max).len)
+    incBtnDisabled = false
+    decBtnDisabled = false
+  
+  let width = igCalcTextSize($max).x + (igGetStyle().framePadding.x * 2)
+
+  igBeginGroup()
+
+  if val >= max:
+    incBtnDisabled = true
+    igPushItemFlag(ImGuiItemFlags.Disabled, true)
+    igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
+
+  if igButton(&"+##+{label}", igVec2(width, 0)):
+    if val < max:
+      inc val, step
+
+  if incBtnDisabled:
+    igPopStyleVar()
+    igPopItemFlag()
+
+  igSetNextItemWidth(width)
+
+  if igInputText(label, buf, uint(($max).len + 1), makeFlags(CharsDecimal, AutoSelectAll)):
+    val = myParseInt(buf).int32
+    if val < min:
+      val = min
+
+  if val <= min:
+    decBtnDisabled = true
+    igPushItemFlag(ImGuiItemFlags.Disabled, true)
+    igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
+
+  if igButton(&"-##-{label}", igVec2(width, 0)):
+    if val > min:
+      dec val, step
+
+  if decBtnDisabled:
+    igPopStyleVar()
+    igPopItemFlag()
+  
+  igEndGroup()
+
+proc deleted*[T](list: seq[T], i: Natural): seq[T] = 
+  result = list
+  result.delete(i)
