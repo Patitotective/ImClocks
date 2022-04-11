@@ -17,5 +17,5 @@ Go to the [releases page](https://github.com/Patitotective/ImClocks/releases/lat
 
 Contact me:
 - Discord: **Patitotective#0127**.
-- Tiwtter: [@patitotective](https://twitter.com/patitotective).
+- Twitter: [@patitotective](https://twitter.com/patitotective).
 - Email: **cristobalriaga@gmail.com**.
