@@ -10,6 +10,8 @@ nimble install https://github.com/Patitotective/ImClocks
 ### AppImage (Linux)
 Go to the [releases page](https://github.com/Patitotective/ImClocks/releases/latest) and download [ImClocks-x86_64.AppImage](https://github.com/Patitotective/ImClocks/releases/latest/download/ImClocks-x86_64.AppImage).
 
+![Video](https://github.com/Patitotective/ImClocks/blob/main/screenshots/video.mp4)
+
 ## About
 - Alarm sound: https://freesound.org/people/kwahmah_02/sounds/250629.
 - GitHub: https://github.com/Patitotective/ImPasswordGen.
