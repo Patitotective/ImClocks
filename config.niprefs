@@ -16,4 +16,4 @@ fontSize=17f
 alarmPath="assets/alarm.mp3"
 
 # Window
-minSize=[350, 300] # Width, height
+minSize=[360, 300] # Width, height

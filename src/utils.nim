@@ -1,10 +1,13 @@
-import std/[strutils, strformat, enumutils, typetraits, macros, os]
+import std/[strutils, strformat, enumutils, typetraits, monotimes, macros, os]
 
 import chroma
 import niprefs
 import stopwatch
 import stb_image/read as stbi
 import nimgl/[imgui, glfw, opengl]
+import parasound/[miniaudio, dr_wav]
+
+import icons
 
 export enumutils
 
@@ -28,10 +31,13 @@ type
     startBtnText*: string
     lapBtnText*: string
 
-    time*: array[3, int32] # For the timer
+    time*: array[3, int32] # When selecting the time
     timeMs*: int # time in milliseconds for countback
     timer*: Stopwatch
     timerState*: SwState
+    alarmThread*: Thread[(string, ptr bool)]
+    stopAlarm*: bool
+    monotimeStart*: Monotime
 
     currentZone*: int32
     filter*: ImGuiTextFilter
@@ -177,6 +183,14 @@ proc newImFontConfig*(mergeMode = false): ImFontConfig =
   result.mergeMode = mergeMode
 
 proc formatTime*(ms: int64, includeMs: bool = true): string = 
+  var
+    negative = false
+    ms = ms
+
+  if ms < 0:
+    negative = true
+    ms *= -1
+  
   let
     days = ms div (1000 * 60 * 60 * 24)
     hours = (ms div (1000 * 60 * 60)) mod 24
@@ -184,10 +198,13 @@ proc formatTime*(ms: int64, includeMs: bool = true): string =
     seconds = (ms div 1000) mod 60
     milliseconds = (ms div 10) mod 100 # Rest of milliseconds
 
+  if negative:
+    result.add "-"
+
   if days > 0:
-    result = &"{days:02} {hours:02}:{minutes:02}:{seconds:02}"
+    result.add &"{days:02} {hours:02}:{minutes:02}:{seconds:02}"
   else:
-    result = &"{hours:02}:{minutes:02}:{seconds:02}"
+    result.add &"{hours:02}:{minutes:02}:{seconds:02}"
 
   if includeMs:
     result.add &".{milliseconds:02}"
@@ -249,7 +266,7 @@ proc vInputInt*(label: cstring, val: var int32, step: int32 = 1, min: int32 = 0,
     igPushItemFlag(ImGuiItemFlags.Disabled, true)
     igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
 
-  if igButton(&"+##+{label}", igVec2(width, 0)):
+  if igButton(&"{FA_Plus}##p{label}", igVec2(width, 0)):
     if val < max:
       inc val, step
 
@@ -269,7 +286,7 @@ proc vInputInt*(label: cstring, val: var int32, step: int32 = 1, min: int32 = 0,
     igPushItemFlag(ImGuiItemFlags.Disabled, true)
     igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
 
-  if igButton(&"-##-{label}", igVec2(width, 0)):
+  if igButton(&"{FA_Minus}##m{label}", igVec2(width, 0)):
     if val > min:
       dec val, step
 
@@ -282,3 +299,21 @@ proc vInputInt*(label: cstring, val: var int32, step: int32 = 1, min: int32 = 0,
 proc deleted*[T](list: seq[T], i: Natural): seq[T] = 
   result = list
   result.delete(i)
+
+proc playAudio*(path: string, sleepMsecs: int, stop: ptr bool): bool =
+  var engine = newSeq[uint8](ma_engine_size())
+
+  if MA_SUCCESS != ma_engine_init(nil, engine[0].addr):
+    return false
+
+  if MA_SUCCESS != ma_engine_play_sound(engine[0].addr, path, nil):
+    ma_engine_uninit(engine[0].addr)
+    return false
+
+  for _ in 0..<sleepMsecs:
+    if stop[]: break
+    sleep(1)
+  
+  ma_engine_uninit(engine[0].addr)
+
+  result = true

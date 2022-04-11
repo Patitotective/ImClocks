@@ -1,4 +1,4 @@
-import std/[strutils, sequtils, algorithm, enumerate, strformat, browsers, times, os]
+import std/[strutils, sequtils, algorithm, enumerate, strformat, browsers, monotimes, times, os]
 
 import timezones
 import chroma
@@ -127,6 +127,11 @@ proc drawWorldTab(app: var App) =
     if igIsItemHovered():
       igSetTooltip(dt.format("yyyy-MM-dd HH:mm:ss 'UTC'zz"))
 
+  if app.prefs["timezones"].getSeq().len == 0:
+    igText("No timezones")
+
+  igSpacing()
+
   if igButton("Add Timezone"):
     igOpenPopup("Add Timezone")
   
@@ -137,7 +142,7 @@ proc drawWorldTab(app: var App) =
 proc startSw(app: var App) = 
   case app.swState
   of Stopped: # Start
-    app.startBtnText = "Pause"
+    app.startBtnText = "Pause " & FA_Pause
     app.lapBtnText = "Lap"
     app.swState = Running
     app.sw.start()
@@ -150,7 +155,7 @@ proc startSw(app: var App) =
     app.sw.recordLaps = true
     # app.sw.rmLap(app.sw.laps.high)
   of Paused: # Resume
-    app.startBtnText = "Pause"
+    app.startBtnText = "Pause " & FA_Pause
     app.lapBtnText = "Lap"
     app.swState = Running
     app.sw.start()
@@ -264,7 +269,10 @@ proc startTimer(app: var App) =
 proc drawTimerEnd(app: var App) = 
   let
     style = igGetStyle()
-    time = formatTime(0, includeMs = false)
+    time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
+
+  # When alarm is playing and odd seconds
+  var redTime = not app.stopAlarm and (getMonotime() - app.monotimeStart).inSeconds mod 2 == 1
 
   var
     height: float32
@@ -284,17 +292,35 @@ proc drawTimerEnd(app: var App) =
   centerCursorY(height + 50)
 
   centerCursorX(igCalcTextSize(time).x + style.framePadding.x * 2)
-  igText(time)
   
+  if redTime:
+    igTextColored(red.igVec4(), time)
+  else:
+    igTextColored(igGetStyle().colors[ImGuiCol.Text.ord], time)
+
+  if not app.stopAlarm:
+    centerCursorX(igCalcTextSize("Stop " & FA_Stop).x)
+
+    igPushStyleColor(ImGuiCol.Button, red.igVec4())
+    igPushStyleColor(ImGuiCol.ButtonHovered, red.darken(0.1).igVec4())
+
+    if igButton("Stop " & FA_Stop):
+      app.stopAlarm = true
+      app.timer.stop()
+
+    igPopStyleColor(2)
+
   centerCursorX(btnsSize.x)
 
   if igButton("Restart", restartBtnSize):
+    app.stopAlarm = true
     app.timer.reset()
     app.startTimer()
 
   igSameLine()
 
   if igButton("New", restartBtnSize):
+    app.stopAlarm = true
     app.timer.reset()
     app.timerState = Stopped
 
@@ -307,14 +333,14 @@ proc drawTimerPause(app: var App) =
     height: float32
     btnsSize: ImVec2
     timeTextSize = igCalcTextSize(time)
-    resumeBtnSize = igCalcTextSize("Resume")
+    stopBtnSize = igCalcTextSize("Stop " & FA_Stop)
 
-  resumeBtnSize.x += style.framePadding.x * 2
+  stopBtnSize.x += style.framePadding.x * 2
 
-  btnsSize.x += resumeBtnSize.x * 2
-  btnsSize.y += resumeBtnSize.y
+  btnsSize.x += stopBtnSize.x * 2
+  btnsSize.y += stopBtnSize.y
 
-  resumeBtnSize.y = 0
+  stopBtnSize.y = 0
 
   height += timeTextSize.y + btnsSize.y
 
@@ -325,12 +351,12 @@ proc drawTimerPause(app: var App) =
 
   centerCursorX(btnsSize.x)
 
-  if igButton("Resume", resumeBtnSize):
+  if igButton("Resume", stopBtnSize):
     app.startTimer()
 
   igSameLine()
 
-  if igButton("Stop", resumeBtnSize):
+  if igButton("Stop " & FA_Stop, stopBtnSize):
     app.timer.reset()
     app.timerState = Stopped
 
@@ -343,7 +369,8 @@ proc drawTimerStop(app: var App) =
   width *= 3
   width += style.itemSpacing.x * 2
 
-  centerCursorX(width)
+  centerCursor(igVec2(width, 150))
+
   vInputInt("##hours", app.time[0], max = 99)
   igSameLine()
   vInputInt("##minutes", app.time[1], max = 59)
@@ -352,14 +379,14 @@ proc drawTimerStop(app: var App) =
 
   igSpacing()
 
-  centerCursorX(igCalcTextSize("Play").x + style.framePadding.x * 2)
+  centerCursorX(igCalcTextSize("Play " & FA_Play).x + style.framePadding.x * 2)
 
   if app.time.foldl(a + b) == 0:
     playBtnDisabled = true
     igPushItemFlag(ImGuiItemFlags.Disabled, true)
     igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
 
-  if igButton("Play"):  
+  if igButton("Play " & FA_Play):  
     app.startTimer()
 
   if playBtnDisabled:
@@ -372,13 +399,20 @@ proc drawTimerRunning(app: var App) =
     time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
   var
     height: float32
-    pauseBtnSize = igCalcTextSize("Pause")
+    pauseBtnSize = igCalcTextSize("Pause " & FA_Pause)
     timeTextSize = igCalcTextSize(time)
 
   if app.timeMs - app.timer.totalMsecs <= 0:
-    app.timer.stop()
+
+    if not app.alarmThread.running and not app.stopAlarm:
+      app.alarmThread.createThread(
+        proc(data: (string, ptr bool)) = discard playAudio(data[0], 5000, data[1]), 
+        (app.config["alarmPath"].getPath(), app.stopAlarm.addr)
+      )
+
     app.drawTimerEnd()
   else:
+    app.stopAlarm = false
     height += timeTextSize.y + pauseBtnSize.y
     centerCursorY(height + 50)
 
@@ -389,7 +423,7 @@ proc drawTimerRunning(app: var App) =
 
     centerCursorX(pauseBtnSize.x + style.framePadding.x * 2)
 
-    if igButton("Pause"):
+    if igButton("Pause " & FA_Pause):
       app.timer.stop()
       app.timerState = Paused
 
@@ -414,7 +448,7 @@ proc drawMenuBar(app: var App) =
       igEndMenu()
 
     if igBeginMenu("Edit"):
-      igMenuItem("Add Timezone", "Ctrl+A", openAddTz.addr)
+      igMenuItem("Add Timezone", "", openAddTz.addr)
       if igMenuItem(&"{app.startBtnText} Stopwatch"):
         app.startSw()
       if igMenuItem(&"{app.lapBtnText} Stopwatch", enabled = app.swState != Stopped):
@@ -422,7 +456,7 @@ proc drawMenuBar(app: var App) =
       
       igEndMenu()
 
-    if igBeginMenu("About " & FA_ClockO):
+    if igBeginMenu("About"):
       if igMenuItem("Website " & FA_Heart):
         app.config["website"].getString().openDefaultBrowser()
 
@@ -452,13 +486,13 @@ proc drawMain(app: var App) = # Draw the main window
   app.drawMenuBar()
 
   if igBeginTabBar("Clocks"):
-    if igBeginTabItem("World"):
+    if igBeginTabItem("World " & FA_Globe):
       app.drawWorldTab()
 
-    if igBeginTabItem("Stopwatch"):
+    if igBeginTabItem("Stopwatch " & FA_ClockO):
       app.drawSwTab()
 
-    if igBeginTabItem("Timer"):
+    if igBeginTabItem("Timer " & FA_HourglassHalf):
       igPushFont(app.bigFont)
       app.drawTimerTab()
       igPopFont()
@@ -565,6 +599,8 @@ proc main() =
   io.fonts.addFontFromFileTTF(app.config["iconFontPath"].getPath(), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
 
   app.bigFont = io.fonts.addFontFromFileTTF(app.config["fontPath"].getPath(), app.config["fontSize"].getFloat()+5)
+
+  io.fonts.addFontFromFileTTF(app.config["iconFontPath"].getPath(), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
 
   doAssert igGlfwInitForOpenGL(app.win, true)
   doAssert igOpenGL3Init()
