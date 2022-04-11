@@ -11,6 +11,8 @@ installFiles     = @["config.niprefs", "assets/icon.png", "assets/style.niprefs"
 # Dependencies
 
 requires "nim >= 1.6.2"
+requires "nake >= 1.9.4"
+requires "timezones >= 0.5.4"
 requires "chroma >= 0.2.4"
 requires "niprefs >= 0.1.2"
 requires "https://github.com/Patitotective/ImStyle >= 0.1.0"
