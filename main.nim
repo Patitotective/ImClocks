@@ -4,11 +4,10 @@ import timezones
 import chroma
 import imstyle
 import niprefs
-import stopwatch
 import nimgl/[opengl, glfw]
 import nimgl/imgui, nimgl/imgui/[impl_opengl, impl_glfw]
 
-import src/[utils, icons]
+import src/[stopwatch, utils, icons]
 
 const
   resourcesDir = "data"
@@ -150,10 +149,9 @@ proc startSw(app: var App) =
     app.startBtnText = "Resume"
     app.lapBtnText = "Clear"
     app.swState = Paused
-    app.sw.recordLaps = false
-    app.sw.stop()
-    app.sw.recordLaps = true
-    # app.sw.rmLap(app.sw.laps.high)
+    
+    app.sw.stop(lap = false)
+
   of Paused: # Resume
     app.startBtnText = "Pause " & FA_Pause
     app.lapBtnText = "Lap"
@@ -167,7 +165,7 @@ proc lapSw(app: var App) =
     app.sw.stop()
     app.sw.start()
   of Paused: # Clear/Stop
-    app.startBtnText = "Start"
+    app.startBtnText = "Start " & FA_Play
     app.lapBtnText = "Lap"
     app.swState = Stopped
     app.sw.reset()
@@ -363,7 +361,7 @@ proc drawTimerPause(app: var App) =
 proc drawTimerStop(app: var App) = 
   let style = igGetStyle()
   var
-    playBtnDisabled = false
+    startBtnDisabled = false
     width = igCalcTextSize("99").x + (style.framePadding.x * 2)
   
   width *= 3
@@ -379,17 +377,17 @@ proc drawTimerStop(app: var App) =
 
   igSpacing()
 
-  centerCursorX(igCalcTextSize("Play " & FA_Play).x + style.framePadding.x * 2)
+  centerCursorX(igCalcTextSize("Start " & FA_Play).x + style.framePadding.x * 2)
 
   if app.time.foldl(a + b) == 0:
-    playBtnDisabled = true
+    startBtnDisabled = true
     igPushItemFlag(ImGuiItemFlags.Disabled, true)
     igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
 
-  if igButton("Play " & FA_Play):  
+  if igButton("Start " & FA_Play):  
     app.startTimer()
 
-  if playBtnDisabled:
+  if startBtnDisabled:
     igPopStyleVar()
     igPopItemFlag()
 
@@ -562,7 +560,7 @@ proc initPrefs(app: var App) =
   }).initPrefs(prefsPath)
 
 proc initApp*(config: PObjectType): App = 
-  result = App(config: config, sw: stopwatch(), swState: Stopped, startBtnText: "Start", lapBtnText: "Lap", timerState: Stopped)
+  result = App(config: config, sw: initStopwatch(), swState: Stopped, startBtnText: "Start " & FA_Play, lapBtnText: "Lap", timerState: Stopped)
   result.initPrefs()
 
 proc terminate(app: var App) = 

@@ -2,12 +2,11 @@ import std/[strutils, strformat, enumutils, typetraits, monotimes, macros, os]
 
 import chroma
 import niprefs
-import stopwatch
 import stb_image/read as stbi
 import nimgl/[imgui, glfw, opengl]
 import parasound/[miniaudio, dr_wav]
 
-import icons
+import stopwatch, icons
 
 export enumutils
 
