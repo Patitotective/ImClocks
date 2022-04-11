@@ -1,0 +1,42 @@
+name: Tagged realease
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag name
+        type: string
+        required: true
+      draft: 
+        description: Draft release
+        default: 'false'
+        required: true
+        type: boolean
+jobs:
+  tagged-release:
+    name: Tagged Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: iffy/install-nim@v4.1.1
+      - name: Install x11 dev libraries
+        run: |
+          sudo apt-get install libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl-dev
+      - name: Install appimagetool
+        run: |
+          wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
+      - name: Build and run an AppImage
+        run: |
+          nimble install -d -y
+          nake run
+
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: ${{ github.event.inputs.tag }}
+          draft: ${{ github.events.input.draft == 'true'}}
+          prerelease: false
+          files: |
+            AppDir/*.AppImage
