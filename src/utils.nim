@@ -1,12 +1,11 @@
-import std/[strutils, strformat, enumutils, typetraits, monotimes, macros, os]
-
+import std/[typetraits, strformat, enumutils, monotimes, strutils, strscans, macros, times, os]
 import chroma
 import niprefs
+import stopwatch
 import stb_image/read as stbi
 import nimgl/[imgui, glfw, opengl]
-import parasound/[miniaudio, dr_wav]
 
-import stopwatch, icons
+import icons, sound
 
 export enumutils
 
@@ -16,32 +15,7 @@ type
     Stopped
     Paused
 
-  App* = ref object
-    win*: GLFWWindow
-    font*: ptr ImFont
-    bigFont*: ptr ImFont
-    prefs*: Prefs
-    config*: PObjectType # Prefs table
-    cache*: PObjectType # Settings cache
-
-    # Variables
-    sw*: Stopwatch
-    swState*: SwState
-    startBtnText*: string
-    lapBtnText*: string
-
-    time*: array[3, int32] # When selecting the time
-    timeMs*: int # time in milliseconds for countback
-    timer*: Stopwatch
-    timerState*: SwState
-    alarmThread*: Thread[(string, ptr bool)]
-    stopAlarm*: bool
-    monotimeStart*: Monotime
-
-    currentZone*: int32
-    filter*: ImGuiTextFilter
-
-  SettingTypes* = enum
+  SettingType* = enum
     Input # Input text
     Check # Checkbox
     Slider # Int slider
@@ -52,9 +26,75 @@ type
     Radio # Radio button
     Color3 # Color edit RGB
     Color4 # Color edit RGBA
+    File
     Section
 
   ImageData* = tuple[image: seq[byte], width, height: int]
+
+  App* = ref object
+    win*: GLFWWindow
+    font*, bigFont*: ptr ImFont
+    prefs*: Prefs
+    cache*: PObjectType # Settings cache
+    config*: PObjectType # Prefs table
+
+    # Variables
+    sw*: Stopwatch
+    swState*: SwState
+    lapBtnText*: string
+    startBtnText*: string
+
+    timeMs*: int # time in milliseconds for countback
+    timer*: Stopwatch
+    playAlarm*: bool
+    alarmSound*: Sound
+    alarmVoice*: Voice
+    timerState*: SwState
+    time*: array[3, int32] # When selecting the time
+    monotimeStart*: Monotime
+
+    currentZone*: int32
+    filter*: ImGuiTextFilter
+
+proc `+`*(vec1, vec2: ImVec2): ImVec2 = 
+  ImVec2(x: vec1.x + vec2.x, y: vec1.y + vec2.y)
+
+proc `-`*(vec1, vec2: ImVec2): ImVec2 = 
+  ImVec2(x: vec1.x - vec2.x, y: vec1.y - vec2.y)
+
+proc `*`*(vec1, vec2: ImVec2): ImVec2 = 
+  ImVec2(x: vec1.x * vec2.x, y: vec1.y * vec2.y)
+
+proc `/`*(vec1, vec2: ImVec2): ImVec2 = 
+  ImVec2(x: vec1.x / vec2.x, y: vec1.y / vec2.y)
+
+proc `+`*(vec: ImVec2, val: float32): ImVec2 = 
+  ImVec2(x: vec.x + val, y: vec.y + val)
+
+proc `-`*(vec: ImVec2, val: float32): ImVec2 = 
+  ImVec2(x: vec.x - val, y: vec.y - val)
+
+proc `*`*(vec: ImVec2, val: float32): ImVec2 = 
+  ImVec2(x: vec.x * val, y: vec.y * val)
+
+proc `/`*(vec: ImVec2, val: float32): ImVec2 = 
+  ImVec2(x: vec.x / val, y: vec.y / val)
+
+proc `+=`*(vec1: var ImVec2, vec2: ImVec2) = 
+  vec1.x += vec2.x
+  vec1.y += vec2.y
+
+proc `-=`*(vec1: var ImVec2, vec2: ImVec2) = 
+  vec1.x -= vec2.x
+  vec1.y -= vec2.y
+
+proc `*=`*(vec1: var ImVec2, vec2: ImVec2) = 
+  vec1.x *= vec2.x
+  vec1.y *= vec2.y
+
+proc `/=`*(vec1: var ImVec2, vec2: ImVec2) = 
+  vec1.x /= vec2.x
+  vec1.y /= vec2.y
 
 # To be able to print large holey enums
 macro enumFullRange*(a: typed): untyped =
@@ -138,12 +178,46 @@ proc igVec4*(x, y, z, w: float32): ImVec4 = ImVec4(x: x, y: y, z: z, w: w)
 
 proc igVec4*(color: Color): ImVec4 = ImVec4(x: color.r, y: color.g, z: color.b, w: color.a)
 
+proc igHSV*(h, s, v: float32, a: float32 = 1f): ImColor = 
+  result.addr.hSVNonUDT(h, s, v, a)
+
+proc igGetContentRegionAvail*(): ImVec2 = 
+  igGetContentRegionAvailNonUDT(result.addr)
+
+proc igGetWindowPos*(): ImVec2 = 
+  igGetWindowPosNonUDT(result.addr)
+
+proc igCalcTextSize*(text: cstring, text_end: cstring = nil, hide_text_after_double_hash: bool = false, wrap_width: float32 = -1.0'f32): ImVec2 = 
+  igCalcTextSizeNonUDT(result.addr, text, text_end, hide_text_after_double_hash, wrap_width)
+
+proc igColorConvertU32ToFloat4*(color: uint32): ImVec4 = 
+  igColorConvertU32ToFloat4NonUDT(result.addr, color)
+
+proc getCenter*(self: ptr ImGuiViewport): ImVec2 = 
+  getCenterNonUDT(result.addr, self)
+
+proc centerCursorX*(width: float32, align: float = 0.5f, availWidth: float32 = igGetContentRegionAvail().x) = 
+  let off = (availWidth - width) * align
+  
+  if off > 0:
+    igSetCursorPosX(igGetCursorPosX() + off)
+
+proc centerCursorY*(height: float32, align: float = 0.5f, availHeight: float32 = igGetContentRegionAvail().y) = 
+  let off = (availHeight - height) * align
+  
+  if off > 0:
+    igSetCursorPosY(igGetCursorPosY() + off)
+
+proc centerCursor*(size: ImVec2, alignX: float = 0.5f, alignY: float = 0.5f) = 
+  centerCursorX(size.x, alignX)
+  centerCursorY(size.y, alignY)
+
 proc initGLFWImage*(data: ImageData): GLFWImage = 
   result = GLFWImage(pixels: cast[ptr cuchar](data.image[0].unsafeAddr), width: int32 data.width, height: int32 data.height)
 
-proc readImage*(path: string): ImageData = 
+proc readImageFromMemory*(data: string): ImageData = 
   var channels: int
-  result.image = stbi.load(path, result.width, result.height, channels, stbi.Default)
+  result.image = stbi.loadFromMemory(cast[seq[byte]](data), result.width, result.height, channels, stbi.Default)
 
 proc loadTextureFromData*(data: var ImageData, outTexture: var GLuint) =
     # Create a OpenGL texture identifier
@@ -181,6 +255,87 @@ proc newImFontConfig*(mergeMode = false): ImFontConfig =
   result.rasterizerMultiply = 1.0
   result.mergeMode = mergeMode
 
+proc igAddFontFromMemoryTTF*(self: ptr ImFontAtlas, data: string, size_pixels: float32, font_cfg: ptr ImFontConfig = nil, glyph_ranges: ptr ImWchar = nil): ptr ImFont {.discardable.} = 
+  let igFontStr = cast[cstring](igMemAlloc(data.len.uint))
+  igFontStr[0].unsafeAddr.copyMem(data[0].unsafeAddr, data.len)
+  result = self.addFontFromMemoryTTF(igFontStr, data.len.int32, sizePixels, font_cfg, glyph_ranges)
+
+proc openURL*(url: string) = 
+  when defined(MacOS) or defined(MacOSX):
+    discard execShellCmd("open " & url)
+  elif defined(Windows):
+    discard execShellCmd("start " & url)
+  else:
+    discard execShellCmd("xdg-open " & url)
+
+proc removeInside*(text: string, open, close: char): tuple[text: string, inside: string] = 
+  ## Remove the characters inside open..close from text, return text and the removed characters
+  runnableExamples:
+    assert "Hello<World>".removeInside('<', '>') == ("Hello", "World")
+  var inside = false
+  for i in text:
+    if i == open:
+      inside = true
+      continue
+
+    if not inside:
+      result.text.add i
+
+    if i == close:
+      inside = false
+
+    if inside:
+      result.inside.add i
+
+proc initconfig*(app: var App, settings: PrefsNode, parent: string = "") = 
+  # Add the preferences with the values defined in config["settings"]
+  for name, data in settings: 
+    let settingType = parseEnum[SettingType](data["type"])
+    if settingType == Section:
+      app.initConfig(data["content"], parent = name)  
+    elif parent.len > 0:
+      if not app.prefs.hasPath(parent, name):
+        app.prefs[parent, name] = data["default"]
+    else:
+      if name notin app.prefs:
+        app.prefs[name] = data["default"]
+
+proc validateDate*(input, format: string): tuple[success: bool, date: DateTime] = 
+  try:
+    result.date = input.parse(format)
+    result.success = true
+  except TimeParseError:
+    result.success = false
+
+proc newString*(lenght: int, default: string): string = 
+  result = newString(lenght)
+  result[0..default.high] = default
+
+proc cleanString*(str: string): string = 
+  if '\0' in str:
+    str[0..<str.find('\0')].strip()
+  else:
+    str.strip()
+
+proc igPushDisabled*() = 
+  igPushItemFlag(ImGuiItemFlags.Disabled, true)
+  igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
+
+proc igPopDisabled*() = 
+  igPopItemFlag()
+  igPopStyleVar()
+
+proc remove*[T](s: var seq[T], val: T) = 
+  for i in s.high.countDown(0):
+    if s[i] == val:
+      s.delete(i)
+
+proc pushString*(str: var string, val: string) = 
+  if val.len < str.len:
+    str[0..val.len] = val & '\0'
+  else:
+    str[0..str.high] = val[0..str.high]
+
 proc formatTime*(ms: int64, includeMs: bool = true): string = 
   var
     negative = false
@@ -208,111 +363,46 @@ proc formatTime*(ms: int64, includeMs: bool = true): string =
   if includeMs:
     result.add &".{milliseconds:02}"
 
-proc centerCursorX*(width: float32, align: float = 0.5f) = 
-  var avail: ImVec2
-
-  igGetContentRegionAvailNonUDT(avail.addr)
-  
-  let off = (avail.x - width) * align
-  
-  if off > 0:
-    igSetCursorPosX(igGetCursorPosX() + off)
-
-proc centerCursorY*(height: float32, align: float = 0.5f) = 
-  var avail: ImVec2
-
-  igGetContentRegionAvailNonUDT(avail.addr)
-  
-  let off = (avail.y - height) * align
-  
-  if off > 0:
-    igSetCursorPosY(igGetCursorPosY() + off)
-
-proc centerCursor*(size: ImVec2, alignX: float = 0.5f, alignY: float = 0.5f) = 
-  centerCursorX(size.x, alignX)
-  centerCursorY(size.y, alignY)
-
-proc igCalcTextSize*(text: cstring, text_end: cstring = nil, hide_text_after_double_hash: bool = false, wrap_width: float32 = -1.0'f32): ImVec2 = 
-  igCalcTextSizeNonUDT(result.addr, text, text_end, hide_text_after_double_hash, wrap_width)
-
-proc myParseInt*(s: string): int = 
-  var s = s.replace("\x00", "")
-
-  if s.len == 0: return 0
-
-  try:
-    if s[0] == '-':
-      result = -s[1..s.high].parseInt()
-    else:
-      if '-' in s:
-        s = s.replace("-", "")
-      result = s.parseInt()
-  except ValueError:
-    result = 0  
-
 proc vInputInt*(label: cstring, val: var int32, step: int32 = 1, min: int32 = 0, max: int32 = 1024) = 
-  var
-    buf = intToStr(val, ($max).len)
-    incBtnDisabled = false
-    decBtnDisabled = false
+  let width = igCalcTextSize(cstring $max).x + (igGetStyle().framePadding.x * 2)
   
-  let width = igCalcTextSize($max).x + (igGetStyle().framePadding.x * 2)
+  var buf = intToStr(val, ($max).len)
+  var decBtnDisabled, incBtnDisabled = false
 
   igBeginGroup()
 
   if val >= max:
     incBtnDisabled = true
-    igPushItemFlag(ImGuiItemFlags.Disabled, true)
-    igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
+    igPushDisabled()
 
-  if igButton(&"{FA_Plus}##p{label}", igVec2(width, 0)):
+  if igButton(cstring &"{FA_Plus}##p{label}", igVec2(width, 0)):
     if val < max:
       inc val, step
 
   if incBtnDisabled:
-    igPopStyleVar()
-    igPopItemFlag()
+    igPopDisabled()
 
   igSetNextItemWidth(width)
 
-  if igInputText(label, buf, uint(($max).len + 1), makeFlags(CharsDecimal, AutoSelectAll)):
-    val = myParseInt(buf).int32
-    if val < min:
-      val = min
+  if igInputText(label, cstring buf, uint(($max).len + 1), makeFlags(CharsDecimal, AutoSelectAll)):
+    let (ok, num) = scanTuple(buf, "$i")
+    if ok:
+      if num < min:
+        val = min
+      elif num > max:
+        val = max
+      else:
+        val = int32 num
 
   if val <= min:
     decBtnDisabled = true
-    igPushItemFlag(ImGuiItemFlags.Disabled, true)
-    igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
+    igPushDisabled()
 
-  if igButton(&"{FA_Minus}##m{label}", igVec2(width, 0)):
+  if igButton(cstring &"{FA_Minus}##m{label}", igVec2(width, 0)):
     if val > min:
       dec val, step
 
   if decBtnDisabled:
-    igPopStyleVar()
-    igPopItemFlag()
+    igPopDisabled()
   
   igEndGroup()
-
-proc deleted*[T](list: seq[T], i: Natural): seq[T] = 
-  result = list
-  result.delete(i)
-
-proc playAudio*(path: string, sleepMsecs: int, stop: ptr bool): bool =
-  var engine = newSeq[uint8](ma_engine_size())
-
-  if MA_SUCCESS != ma_engine_init(nil, engine[0].addr):
-    return false
-
-  if MA_SUCCESS != ma_engine_play_sound(engine[0].addr, path, nil):
-    ma_engine_uninit(engine[0].addr)
-    return false
-
-  for _ in 0..<sleepMsecs:
-    if stop[]: break
-    sleep(1)
-  
-  ma_engine_uninit(engine[0].addr)
-
-  result = true

@@ -1,61 +1,83 @@
-import std/[strutils, sequtils, algorithm, enumerate, strformat, browsers, monotimes, times, os]
+import std/[algorithm, enumerate, strformat, monotimes, strutils, sequtils, times, os]
 
-import timezones
 import chroma
 import imstyle
 import niprefs
+import stopwatch
+import timezones
 import nimgl/[opengl, glfw]
 import nimgl/imgui, nimgl/imgui/[impl_opengl, impl_glfw]
 
-import src/[stopwatch, utils, icons]
+import src/[prefsmodal, utils, icons, sound]
+when defined(release):
+  from resourcesdata import resources
 
 const
-  resourcesDir = "data"
   configPath = "config.niprefs"
   red = "#ED333B".parseHtmlColor()
   blue = "#3584E4".parseHtmlColor()
 
-proc getPath(path: string): string = 
-  # When running on an AppImage get the path from the AppImage resources
-  when defined(appImage):
-    result = getEnv"APPDIR" / resourcesDir / path.extractFilename()
+proc getData(path: string): string = 
+  when defined(release):
+    resources[path]
   else:
-    result = getAppDir() / path
+    readFile(path)
 
-proc getPath(path: PrefsNode): string = 
-  path.getString().getPath()
+proc getData(node: PrefsNode): string = 
+  node.getString().getData()
 
-proc drawAboutModal(app: var App) = 
+proc getCacheDir(app: App): string = 
+  getCacheDir(app.config["name"].getString())
+
+proc drawAboutModal(app: App) = 
   var center: ImVec2
   getCenterNonUDT(center.addr, igGetMainViewport())
   igSetNextWindowPos(center, Always, igVec2(0.5f, 0.5f))
 
-  if igBeginPopupModal("About " & app.config["name"].getString(), flags = makeFlags(AlwaysAutoResize)):
-
+  let unusedOpen = true # Passing this parameter creates a close button
+  if igBeginPopupModal(cstring "About " & app.config["name"].getString(), unusedOpen.unsafeAddr, flags = makeFlags(ImGuiWindowFlags.NoResize)):
     # Display icon image
-    var
-      texture: GLuint
-      image = app.config["iconPath"].getPath().readImage()
+    var texture: GLuint
+    var image = app.config["iconPath"].getData().readImageFromMemory()
+
     image.loadTextureFromData(texture)
-    
+
     igImage(cast[ptr ImTextureID](texture), igVec2(64, 64)) # Or igVec2(image.width.float32, image.height.float32)
+    if igIsItemHovered():
+      igSetTooltip(cstring app.config["website"].getString() & " " & FA_ExternalLink)
+      
+      if igIsMouseClicked(ImGuiMouseButton.Left):
+        app.config["website"].getString().openURL()
 
     igSameLine()
     
     igPushTextWrapPos(250)
-    igTextWrapped(app.config["comment"].getString())
+    igTextWrapped(app.config["comment"].getString().cstring)
     igPopTextWrapPos()
 
     igSpacing()
 
-    igTextWrapped("Credits: " & app.config["authors"].getSeq().mapIt(it.getString()).join(", "))
+    # To make it not clickable
+    igPushItemFlag(ImGuiItemFlags.Disabled, true)
+    igSelectable("Credits", true, makeFlags(ImGuiSelectableFlags.DontClosePopups))
+    igPopItemFlag()
 
-    if igButton("Ok"):
-      igCloseCurrentPopup()
+    if igBeginChild("##credits", igVec2(0, 75)):
+      for author in app.config["authors"]:
+        let (name, url) = block: 
+          let (name,  url) = author.getString().removeInside('<', '>')
+          (name.strip(),  url.strip())
 
-    igSameLine()
+        if igSelectable(cstring name) and url.len > 0:
+            url.openURL()
+        if igIsItemHovered() and url.len > 0:
+          igSetTooltip(cstring url & " " & FA_ExternalLink)
+      
+      igEndChild()
 
-    igText(app.config["version"].getString())
+    igSpacing()
+
+    igText(app.config["version"].getString().cstring)
 
     igEndPopup()
 
@@ -70,10 +92,10 @@ proc drawAddTzModal(app: var App) =
 
     if igBeginListBox("##timezones"):
       for e, item in items:
-        if not app.filter.addr.passFilter(item): continue
+        if not app.filter.addr.passFilter(cstring item): continue
 
         let isSelected = app.currentZone == e
-        if igSelectable(item, isSelected):
+        if igSelectable(cstring item, isSelected):
           app.currentZone = e.int32
 
         if isSelected:
@@ -82,7 +104,8 @@ proc drawAddTzModal(app: var App) =
       igEndListBox()
 
     if igButton("Add"):
-      app.prefs["timezones"] = app.prefs["timezones"].getSeq() & items[app.currentZone].newPString()
+      if items[app.currentZone].newPString() notin app.prefs["timezones"].getSeq():
+        app.prefs["timezones"] = app.prefs["timezones"].getSeq() & items[app.currentZone].newPString()
       igCloseCurrentPopup()
 
     igSameLine()
@@ -93,41 +116,45 @@ proc drawAddTzModal(app: var App) =
     igEndPopup()
 
 proc drawWorldTab(app: var App) = 
+  let style = igGetStyle()
   var selected = -1
 
-  for e, name in enumerate(app.prefs["timezones"]):
-    let
-      dt = now().inZone(name.getString().tz)
-      offset = (now().utcOffset() div 3600) - (dt.utcOffset() div 3600)
+  if igBeginChild("##timezones", size = igVec2(0, igGetContentRegionAvail().y - style.windowPadding.y - igGetFrameHeight() - style.itemSpacing.y)):
+    for e, name in enumerate(app.prefs["timezones"]):
+      let
+        dt = now().inZone(name.getString().tz)
+        offset = (now().utcOffset() div 3600) - (dt.utcOffset() div 3600)
 
-    var utc: string
+      var utc: string
 
-    if offset == 0:
-      utc = "Current timezone"
-    elif offset > 0:
-      utc = &"{offset} hours later"
-    elif offset < 0:
-      utc = &"{offset * -1} hours earlier"
+      if offset == 0:
+        utc = "Current timezone"
+      elif offset > 0:
+        utc = &"{offset} hours later"
+      elif offset < 0:
+        utc = &"{offset * -1} hours earlier"
 
-    if igSelectable(&"{name.getString()}: {utc}", selected == e):
-      selected = e
+      if igSelectable(cstring &"{name.getString()}: {utc}", selected == e):
+        selected = e
 
-    if igBeginPopupContextItem():
-      if igButton(FA_TrashO & " Remove"):
-        app.prefs["timezones"] = app.prefs["timezones"].getSeq().deleted(e)
-      igEndPopup()
+      if igBeginPopupContextItem():
+        if igButton(FA_TrashO & " Remove"):
+          app.prefs["timezones"] = app.prefs["timezones"].deleted(e)
+        igEndPopup()
 
-    igSameLine()
+      igSameLine()
 
-    centerCursorX(dt.getClockStr().igCalcTextSize().x, 1)
+      centerCursorX(igCalcTextSize(cstring dt.getClockStr()).x, 1)
 
-    igText(dt.getClockStr())
+      igText(cstring dt.getClockStr())
 
-    if igIsItemHovered():
-      igSetTooltip(dt.format("yyyy-MM-dd HH:mm:ss 'UTC'zz"))
+      if igIsItemHovered():
+        igSetTooltip(cstring dt.format("yyyy-MM-dd 'UTC'zz"))
 
-  if app.prefs["timezones"].getSeq().len == 0:
-    igText("No timezones")
+    if app.prefs["timezones"].getSeq().len == 0:
+      igText("No timezones")
+
+    igEndChild()
 
   igSpacing()
 
@@ -149,8 +176,9 @@ proc startSw(app: var App) =
     app.startBtnText = "Resume"
     app.lapBtnText = "Clear"
     app.swState = Paused
-    
-    app.sw.stop(lap = false)
+    app.sw.recordLaps = false
+    app.sw.stop()
+    app.sw.recordLaps = true
 
   of Paused: # Resume
     app.startBtnText = "Pause " & FA_Pause
@@ -172,34 +200,25 @@ proc lapSw(app: var App) =
 
 proc drawSwTab(app: var App) = 
   igPushFont(app.bigFont)
-  let
-    style = igGetStyle()
-    time = app.sw.totalMsecs.formatTime()
-  var
-    height: float32
-    btnsSize: ImVec2
-    timeTextSize = time.igCalcTextSize()
-    lapBtnDisabled = false
-    startBtnSize = app.startBtnText.igCalcTextSize()
+  let style = igGetStyle()
+  let time = app.sw.totalMsecs.formatTime()
 
-  startBtnSize.x += style.framePadding.x * 2
+  let height = (igGetFrameHeight() * 2) + style.itemSpacing.y
+  let timeTextWidth = igCalcTextSize(cstring time).x
+  let startBtnWidth = igCalcTextSize(cstring app.startBtnText).x
+  let lapBtnWidth = igCalcTextSize(cstring app.lapBtnText).x
+  let btnsWidth = lapBtnWidth + startBtnWidth + (style.framePadding.x * 4) + style.itemSpacing.x
 
-  btnsSize.x += startBtnSize.x * 2 + style.itemSpacing.x
-  btnsSize.y += startBtnSize.y
+  var lapBtnDisabled = false
 
-  startBtnSize.y = 0 # So it calculates it
+  centerCursorY(height)
+  centerCursorX(timeTextWidth)
 
-  height += timeTextSize.y + btnsSize.y
+  igText(cstring app.sw.totalMsecs.formatTime())
 
-  centerCursorY(height + 50)
+  centerCursorX(btnsWidth)
 
-  centerCursorX(timeTextSize.x)
-
-  igText(app.sw.totalMsecs.formatTime())
-
-  centerCursorX(btnsSize.x)
-
-  if igButton(app.startBtnText, startBtnSize):
+  if igButton(cstring app.startBtnText):
     app.startSw()
 
   igSameLine()
@@ -209,7 +228,7 @@ proc drawSwTab(app: var App) =
     igPushItemFlag(ImGuiItemFlags.Disabled, true)
     igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
 
-  if igButton(app.lapBtnText, startBtnSize):
+  if igButton(cstring app.lapBtnText):
     app.lapSw()
 
   if lapBtnDisabled:
@@ -221,12 +240,12 @@ proc drawSwTab(app: var App) =
   igSpacing()
 
   # Laps table
-  if app.sw.laps.len > 0 and igBeginTable("laps", 3, makeFlags(ImGuiTableFlags.NoClip, BordersOuter, BordersInnerH)):
+  if app.sw.laps.len > 0 and igBeginTable("laps", 3, makeFlags(ImGuiTableFlags.ScrollY, BordersOuter, BordersInnerH)):
     for e in countdown(app.sw.laps.high, app.sw.laps.low):
       igTableNextRow()
 
       igTableNextColumn()
-      igText(app.sw.laps[e].msecs.formatTime())
+      igText(cstring app.sw.laps[e].msecs.formatTime())
 
       igTableNextColumn()
 
@@ -243,16 +262,16 @@ proc drawSwTab(app: var App) =
           text = "-" & (diff * -1).msecs.formatTime()
           color = red.igVec4()
 
-        centerCursorX(igCalcTextSize(text).x)
+        centerCursorX(igCalcTextSize(cstring text).x)
 
-        igTextColored(color, text)
+        igTextColored(color, cstring text)
 
       igTableNextColumn()
       
       # Align right
-      igSetCursorPosX(igGetCursorPosX() + igGetColumnWidth() - igCalcTextSize(&"Lap {e+1}").x - igGetScrollX() - 2 * igGetStyle().itemSpacing.x)
+      igSetCursorPosX(igGetCursorPosX() + igGetColumnWidth() - igCalcTextSize(cstring &"Lap {e+1}").x - igGetScrollX() - 2 * igGetStyle().itemSpacing.x)
       
-      igText(&"Lap {e+1}")
+      igText(cstring &"Lap {e+1}")
 
     igEndTable()
 
@@ -265,109 +284,86 @@ proc startTimer(app: var App) =
   app.timerState = Running
 
 proc drawTimerEnd(app: var App) = 
-  let
-    style = igGetStyle()
-    time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
+  let style = igGetStyle()
+  let time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
 
   # When alarm is playing and odd seconds
-  var redTime = not app.stopAlarm and (getMonotime() - app.monotimeStart).inSeconds mod 2 == 1
+  var redTime = app.alarmVoice.playing and (getMonotime() - app.monotimeStart).inSeconds mod 2 == 1
 
-  var
-    height: float32
-    btnsSize: ImVec2
-    timeTextSize = igCalcTextSize(time)
-    restartBtnSize = igCalcTextSize("Restart")
-
-  restartBtnSize.x += style.framePadding.x * 2
-
-  btnsSize.x += restartBtnSize.x * 2
-  btnsSize.y += restartBtnSize.y
-
-  restartBtnSize.y = 0
-
-  height += timeTextSize.y + btnsSize.y
-
-  centerCursorY(height + 50)
-
-  centerCursorX(igCalcTextSize(time).x + style.framePadding.x * 2)
+  let timeTextWidth = igCalcTextSize(cstring time).x
+  let restartBtnWidth = igCalcTextSize("Restart").x
+  let height = (igGetFrameHeight() * 2) + style.itemSpacing.y + (if app.alarmVoice.playing: igGetFrameHeight() + style.itemSpacing.y else: 0)
+  let btnsWidth = (restartBtnWidth * 2) + (style.framePadding.x * 2) + style.itemSpacing.x
   
-  if redTime:
-    igTextColored(red.igVec4(), time)
-  else:
-    igTextColored(igGetStyle().colors[ImGuiCol.Text.ord], time)
+  centerCursorY(height)
+  centerCursorX(timeTextWidth + (style.framePadding.x * 2))
 
-  if not app.stopAlarm:
+  if redTime:
+    igTextColored(red.igVec4(), cstring time)
+  else:
+    igTextColored(igGetColorU32(Text).igColorConvertU32ToFloat4(), cstring time)
+
+  if app.alarmVoice.playing:
     centerCursorX(igCalcTextSize("Stop " & FA_Stop).x)
 
     igPushStyleColor(ImGuiCol.Button, red.igVec4())
     igPushStyleColor(ImGuiCol.ButtonHovered, red.darken(0.1).igVec4())
 
     if igButton("Stop " & FA_Stop):
-      app.stopAlarm = true
       app.timer.stop()
+      app.alarmVoice.pause()
 
     igPopStyleColor(2)
+  
+  centerCursorX(btnsWidth)
 
-  centerCursorX(btnsSize.x)
-
-  if igButton("Restart", restartBtnSize):
-    app.stopAlarm = true
+  if igButton("Restart"):
+    app.playAlarm = true
     app.timer.reset()
     app.startTimer()
+    app.alarmVoice.pause()
 
   igSameLine()
 
-  if igButton("New", restartBtnSize):
-    app.stopAlarm = true
-    app.timer.reset()
+  if igButton("New", igVec2(restartBtnWidth, 0)):
+    app.playAlarm = true
     app.timerState = Stopped
+    app.timer.reset()
+    app.alarmVoice.pause()
 
 proc drawTimerPause(app: var App) = 
-  let
-    style = igGetStyle()
-    time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
+  let style = igGetStyle()
+  let time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
 
-  var
-    height: float32
-    btnsSize: ImVec2
-    timeTextSize = igCalcTextSize(time)
-    stopBtnSize = igCalcTextSize("Stop " & FA_Stop)
+  let timeTextWidth = igCalcTextSize(cstring time).x
+  let stopBtnWidth = igCalcTextSize("Stop " & FA_Stop).x
+  let resumeBtnWidth = igCalcTextSize("Resume").x
+  let btnsWidth = resumeBtnWidth + stopBtnWidth + (style.framePadding.x * 4) + style.itemSpacing.x
+  let height = (igGetFrameHeight() * 2) + style.itemSpacing.y
 
-  stopBtnSize.x += style.framePadding.x * 2
+  centerCursorY(height)
 
-  btnsSize.x += stopBtnSize.x * 2
-  btnsSize.y += stopBtnSize.y
+  centerCursorX(timeTextWidth + (style.framePadding.x * 2))
+  igText(cstring time)
 
-  stopBtnSize.y = 0
+  centerCursorX(btnsWidth)
 
-  height += timeTextSize.y + btnsSize.y
-
-  centerCursorY(height + 50)
-
-  centerCursorX(igCalcTextSize(time).x + style.framePadding.x * 2)
-  igText(time)
-
-  centerCursorX(btnsSize.x)
-
-  if igButton("Resume", stopBtnSize):
+  if igButton("Resume"):
     app.startTimer()
 
   igSameLine()
 
-  if igButton("Stop " & FA_Stop, stopBtnSize):
+  if igButton("Stop " & FA_Stop):
     app.timer.reset()
     app.timerState = Stopped
 
 proc drawTimerStop(app: var App) = 
   let style = igGetStyle()
-  var
-    startBtnDisabled = false
-    width = igCalcTextSize("99").x + (style.framePadding.x * 2)
-  
-  width *= 3
-  width += style.itemSpacing.x * 2
+  let width = ((igCalcTextSize("99").x + (style.framePadding.x * 2)) * 3) + (style.itemSpacing.x * 2)
+  let height = (igGetFrameHeight() * 4) + (style.itemSpacing.y * 3) + 2
+  var startBtnDisabled = false
 
-  centerCursor(igVec2(width, 150))
+  centerCursor(igVec2(width, height))
 
   vInputInt("##hours", app.time[0], max = 99)
   igSameLine()
@@ -375,51 +371,41 @@ proc drawTimerStop(app: var App) =
   igSameLine()
   vInputInt("##seconds", app.time[2], max = 59)
 
-  igSpacing()
+  igDummy(igVec2(0, 2))
 
-  centerCursorX(igCalcTextSize("Start " & FA_Play).x + style.framePadding.x * 2)
+  centerCursorX(igCalcTextSize("Start " & FA_Play).x + (style.framePadding.x * 2))
 
   if app.time.foldl(a + b) == 0:
     startBtnDisabled = true
-    igPushItemFlag(ImGuiItemFlags.Disabled, true)
-    igPushStyleVar(ImGuiStyleVar.Alpha, igGetStyle().alpha * 0.6)
+    igPushDisabled()
 
   if igButton("Start " & FA_Play):  
     app.startTimer()
 
   if startBtnDisabled:
-    igPopStyleVar()
-    igPopItemFlag()
+    igPopDisabled()
 
 proc drawTimerRunning(app: var App) = 
-  let
-    style = igGetStyle()
-    time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
-  var
-    height: float32
-    pauseBtnSize = igCalcTextSize("Pause " & FA_Pause)
-    timeTextSize = igCalcTextSize(time)
+  let style = igGetStyle()
+  let time = formatTime(app.timeMs - app.timer.totalMsecs, includeMs = false)
 
-  if app.timeMs - app.timer.totalMsecs <= 0:
+  let pauseBtnWidth = igCalcTextSize("Pause " & FA_Pause).x
+  let timeTextWidth = igCalcTextSize(cstring time).x
+  let height = (igGetFrameHeight() * 2) + style.itemSpacing.y
 
-    if not app.alarmThread.running and not app.stopAlarm:
-      app.alarmThread.createThread(
-        proc(data: (string, ptr bool)) = discard playAudio(data[0], 5000, data[1]), 
-        (app.config["alarmPath"].getPath(), app.stopAlarm.addr)
-      )
+  if app.timeMs - app.timer.totalMsecs < 0:
+    if app.playAlarm:
+      app.playAlarm = false
+      app.alarmVoice = app.alarmSound.play(volume = app.prefs["alarmVol"].getFloat(), loop = app.prefs["loopAlarm"].getBool())
 
     app.drawTimerEnd()
   else:
-    app.stopAlarm = false
-    height += timeTextSize.y + pauseBtnSize.y
-    centerCursorY(height + 50)
+    centerCursorY(height)
 
-    centerCursorX(timeTextSize.x + style.framePadding.x * 2)
-    igText(time)
+    centerCursorX(timeTextWidth)
+    igText(cstring time)
 
-    igSpacing()
-
-    centerCursorX(pauseBtnSize.x + style.framePadding.x * 2)
+    centerCursorX(pauseBtnWidth)
 
     if igButton("Pause " & FA_Pause):
       app.timer.stop()
@@ -436,85 +422,100 @@ proc drawTimerTab(app: var App) =
 
   igEndTabItem()
 
-proc drawMenuBar(app: var App) =
-  var openAbout, openAddTz = false
+proc drawMainMenuBar(app: var App) =
+  var openAbout, openPrefs, openAddTz = false
 
-  if igBeginMenuBar():
+  if igBeginMainMenuBar():
     if igBeginMenu("File"):
+      igMenuItem("Preferences " & FA_Cog, "Ctrl+P", openPrefs.addr)
       if igMenuItem("Quit " & FA_Times, "Ctrl+Q"):
         app.win.setWindowShouldClose(true)
       igEndMenu()
 
     if igBeginMenu("Edit"):
       igMenuItem("Add Timezone", "", openAddTz.addr)
-      if igMenuItem(&"{app.startBtnText} Stopwatch"):
+      if igMenuItem(cstring &"{app.startBtnText} Stopwatch"):
         app.startSw()
-      if igMenuItem(&"{app.lapBtnText} Stopwatch", enabled = app.swState != Stopped):
+      if igMenuItem(cstring &"{app.lapBtnText} Stopwatch", enabled = app.swState != Stopped):
         app.lapSw()
       
       igEndMenu()
 
     if igBeginMenu("About"):
       if igMenuItem("Website " & FA_Heart):
-        app.config["website"].getString().openDefaultBrowser()
+        app.config["website"].getString().openURL()
 
-      igMenuItem("About " & app.config["name"].getString(), shortcut = nil, p_selected = openAbout.addr)
+      igMenuItem(cstring  "About " & app.config["name"].getString(), shortcut = nil, p_selected = openAbout.addr)
 
       igEndMenu() 
 
-    igEndMenuBar()
+    igEndMainMenuBar()
 
   # See https://github.com/ocornut/imgui/issues/331#issuecomment-751372071
   if openAbout:
-    igOpenPopup("About " & app.config["name"].getString())
+    igOpenPopup(cstring "About " & app.config["name"].getString())
+  if openPrefs:
+    igOpenPopup("Preferences")
   if openAddTz:
     igOpenPopup("Add Timezone")
 
   # These modals will only get drawn when igOpenPopup(name) are called, respectly
   app.drawAboutModal()
+  app.drawPrefsModal()
   app.drawAddTzModal()
 
 proc drawMain(app: var App) = # Draw the main window
-  let viewport = igGetMainViewport()
-  igSetNextWindowPos(viewport.pos)
-  igSetNextWindowSize(viewport.size)
+  let viewport = igGetMainViewport()  
+  
+  app.drawMainMenuBar()
+  # Work area is the entire viewport minus main menu bar, task bars, etc.
+  igSetNextWindowPos(viewport.workPos)
+  igSetNextWindowSize(viewport.workSize)
 
-  igBegin(app.config["name"].getString(), flags = makeFlags(ImGuiWindowFlags.NoResize, ImGuiWindowFlags.NoSavedSettings, NoMove, NoDecoration, MenuBar))
+  if igBegin(cstring app.config["name"].getString(), flags = makeFlags(ImGuiWindowFlags.NoResize, NoDecoration, NoMove)):
+    if igBeginTabBar("Clocks"):
+      if igBeginTabItem("World " & FA_Globe):
+        app.drawWorldTab()
 
-  app.drawMenuBar()
+      if igBeginTabItem("Stopwatch " & FA_ClockO):
+        app.drawSwTab()
 
-  if igBeginTabBar("Clocks"):
-    if igBeginTabItem("World " & FA_Globe):
-      app.drawWorldTab()
+      if igBeginTabItem("Timer " & FA_HourglassHalf):
+        igPushFont(app.bigFont)
+        app.drawTimerTab()
+        igPopFont()
 
-    if igBeginTabItem("Stopwatch " & FA_ClockO):
-      app.drawSwTab()
-
-    if igBeginTabItem("Timer " & FA_HourglassHalf):
-      igPushFont(app.bigFont)
-      app.drawTimerTab()
-      igPopFont()
-
-    igEndTabBar()
+      igEndTabBar()
 
   igEnd()
 
-proc display(app: var App) = # Called in the main loop
-  glfwPollEvents()
+proc render(app: var App) = # Called in the main loop
+  # Poll and handle events (inputs, window resize, etc.)
+  glfwPollEvents() # Use glfwWaitEvents() to only draw on events (more efficient)
 
+  # Start Dear ImGui Frame
   igOpenGL3NewFrame()
   igGlfwNewFrame()
   igNewFrame()
 
+  # Draw application
   app.drawMain()
 
+  # Render
   igRender()
 
-  let bgColor = igGetStyle().colors[WindowBg.ord]
+  var displayW, displayH: int32
+  let bgColor = igColorConvertU32ToFloat4(uint32 WindowBg)
+
+  app.win.getFramebufferSize(displayW.addr, displayH.addr)
+  glViewport(0, 0, displayW, displayH)
   glClearColor(bgColor.x, bgColor.y, bgColor.z, bgColor.w)
   glClear(GL_COLOR_BUFFER_BIT)
 
   igOpenGL3RenderDrawData(igGetDrawData())  
+
+  app.win.makeContextCurrent()
+  app.win.swapBuffers()
 
 proc initWindow(app: var App) = 
   glfwWindowHint(GLFWContextVersionMajor, 3)
@@ -522,11 +523,11 @@ proc initWindow(app: var App) =
   glfwWindowHint(GLFWOpenglForwardCompat, GLFW_TRUE)
   glfwWindowHint(GLFWOpenglProfile, GLFW_OPENGL_CORE_PROFILE)
   glfwWindowHint(GLFWResizable, GLFW_TRUE)
-  
+
   app.win = glfwCreateWindow(
     app.prefs["win/width"].getInt().int32, 
     app.prefs["win/height"].getInt().int32, 
-    app.config["name"].getString(), 
+    app.config["name"].getString().cstring, 
     icon = false # Do not use default icon
   )
 
@@ -534,21 +535,26 @@ proc initWindow(app: var App) =
     quit(-1)
 
   # Set the window icon
-  var icon = initGLFWImage(app.config["iconPath"].getPath().readImage())
+  var icon = initGLFWImage(app.config["iconPath"].getData().readImageFromMemory())
   app.win.setWindowIcon(1, icon.addr)
 
   app.win.setWindowSizeLimits(app.config["minSize"][0].getInt().int32, app.config["minSize"][1].getInt().int32, GLFW_DONT_CARE, GLFW_DONT_CARE) # minWidth, minHeight, maxWidth, maxHeight
-  app.win.setWindowPos(app.prefs["win/x"].getInt().int32, app.prefs["win/y"].getInt().int32)
 
-  app.win.makeContextCurrent()
+  # If negative pos, center the window in the first monitor
+  if app.prefs["win/x"].getInt() < 0 or app.prefs["win/y"].getInt() < 0:
+    var monitorX, monitorY, count: int32
+    let monitors = glfwGetMonitors(count.addr)
+    let videoMode = monitors[0].getVideoMode()
+
+    monitors[0].getMonitorPos(monitorX.addr, monitorY.addr)
+    app.win.setWindowPos(
+      monitorX + int32((videoMode.width - app.prefs["win/width"].getInt()) / 2), 
+      monitorY + int32((videoMode.height - app.prefs["win/height"].getInt()) / 2)
+    )
+  else:
+    app.win.setWindowPos(app.prefs["win/x"].getInt().int32, app.prefs["win/y"].getInt().int32)
 
 proc initPrefs(app: var App) = 
-  when defined(appImage):
-    # Put prefsPath right next to the AppImage
-    let prefsPath = getEnv"APPIMAGE".parentDir / app.config["prefsPath"].getString()
-  else:
-    let prefsPath = getAppDir() / app.config["prefsPath"].getString()
-  
   app.prefs = toPrefs({
     timezones: [],
     win: {
@@ -557,11 +563,14 @@ proc initPrefs(app: var App) =
       width: 500,
       height: 500
     }
-  }).initPrefs(prefsPath)
+  }).initPrefs((app.getCacheDir() / app.config["name"].getString()).changeFileExt("niprefs"))
 
-proc initApp*(config: PObjectType): App = 
-  result = App(config: config, sw: initStopwatch(), swState: Stopped, startBtnText: "Start " & FA_Play, lapBtnText: "Lap", timerState: Stopped)
+proc initApp(config: PObjectType): App = 
+  result = App(config: config, sw: stopwatch(), swState: Stopped, startBtnText: "Start " & FA_Play, lapBtnText: "Lap", timerState: Stopped, playAlarm: true)
   result.initPrefs()
+  result.initConfig(result.config["settings"])
+  initAudio()
+  result.alarmSound = loadSoundBytes(result.config["alarmPath"].getString(), result.config["alarmPath"].getData())
 
 proc terminate(app: var App) = 
   var x, y, width, height: int32
@@ -574,47 +583,57 @@ proc terminate(app: var App) =
   app.prefs["win/width"] = width
   app.prefs["win/height"] = height
 
-  app.win.destroyWindow()
-
 proc main() =
-  var app = initApp(configPath.getPath().readPrefs())
+  var app = initApp(configPath.getData().parsePrefs())
 
+  # Setup Window
   doAssert glfwInit()
-
   app.initWindow()
+  
+  app.win.makeContextCurrent()
+  glfwSwapInterval(1) # Enable vsync
 
   doAssert glInit()
 
-  let context = igCreateContext()
+  # Setup Dear ImGui context
+  igCreateContext()
   let io = igGetIO()
-  io.iniFilename = nil # Disable ini file
+  io.iniFilename = nil # Disable .ini config file
 
-  app.font = io.fonts.addFontFromFileTTF(app.config["fontPath"].getPath(), app.config["fontSize"].getFloat())
+  # Setup Dear ImGui style using ImStyle
+  setIgStyle(app.config["stylePath"].getData().parsePrefs())
 
-  # Add ForkAwesome icon font
-  var config = utils.newImFontConfig(mergeMode = true)
-  var ranges = [FA_Min.uint16,  FA_Max.uint16]
-  io.fonts.addFontFromFileTTF(app.config["iconFontPath"].getPath(), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
-
-  app.bigFont = io.fonts.addFontFromFileTTF(app.config["fontPath"].getPath(), app.config["fontSize"].getFloat()+5)
-
-  io.fonts.addFontFromFileTTF(app.config["iconFontPath"].getPath(), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
-
+  # Setup Platform/Renderer backends
   doAssert igGlfwInitForOpenGL(app.win, true)
   doAssert igOpenGL3Init()
 
-  setIgStyle(app.config["stylePath"].getPath()) # Load application style
+  # Load fonts
+  app.font = io.fonts.igAddFontFromMemoryTTF(app.config["fontPath"].getData(), app.config["fontSize"].getFloat())
 
+  # Merge ForkAwesome icon font
+  var config = utils.newImFontConfig(mergeMode = true)
+  var ranges = [FA_Min.uint16,  FA_Max.uint16]
+
+  io.fonts.igAddFontFromMemoryTTF(app.config["iconFontPath"].getData(), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
+
+  # Add big font
+  app.bigFont = io.fonts.igAddFontFromMemoryTTF(app.config["fontPath"].getData(), app.config["fontSize"].getFloat()+10)
+
+  # Merge the big font with the icon font
+  io.fonts.igAddFontFromMemoryTTF(app.config["iconFontPath"].getData(), app.config["fontSize"].getFloat()+6, config.addr, ranges[0].addr)
+
+  # Main loop
   while not app.win.windowShouldClose:
-    app.display()
-    app.win.swapBuffers()
+    app.render()
 
+  # Cleanup
   igOpenGL3Shutdown()
   igGlfwShutdown()
-  context.igDestroyContext()
-
-  app.terminate()
   
+  igDestroyContext()
+  
+  app.terminate()
+  app.win.destroyWindow()
   glfwTerminate()
 
 when isMainModule:

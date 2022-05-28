@@ -13,7 +13,7 @@ Go to the [releases page](https://github.com/Patitotective/ImClocks/releases/lat
 ![Video](/screenshots/video.mp4)
 
 ## About
-- Alarm sound: https://freesound.org/people/kwahmah_02/sounds/250629.
+- Alarm sound: https://bigsoundbank.com/detail-0035-electronic-alarm-buzzer-1.html.
 - GitHub: https://github.com/Patitotective/ImPasswordGen.
 - Discord: https://discord.gg/as85Q4GnR6.
 
