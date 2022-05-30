@@ -2,10 +2,12 @@ import std/[typetraits, strformat, enumutils, monotimes, strutils, strscans, mac
 import chroma
 import niprefs
 import stopwatch
+import tinydialogs
 import stb_image/read as stbi
 import nimgl/[imgui, glfw, opengl]
 
 import icons, sound
+import ../resourcesdata
 
 export enumutils
 
@@ -26,7 +28,7 @@ type
     Radio # Radio button
     Color3 # Color edit RGB
     Color4 # Color edit RGBA
-    File
+    ChooseFile
     Section
 
   ImageData* = tuple[image: seq[byte], width, height: int]
@@ -37,6 +39,7 @@ type
     prefs*: Prefs
     cache*: PObjectType # Settings cache
     config*: PObjectType # Prefs table
+    res*: Table[string, string] # Resources
 
     # Variables
     sw*: Stopwatch
@@ -300,13 +303,6 @@ proc initconfig*(app: var App, settings: PrefsNode, parent: string = "") =
       if name notin app.prefs:
         app.prefs[name] = data["default"]
 
-proc validateDate*(input, format: string): tuple[success: bool, date: DateTime] = 
-  try:
-    result.date = input.parse(format)
-    result.success = true
-  except TimeParseError:
-    result.success = false
-
 proc newString*(lenght: int, default: string): string = 
   result = newString(lenght)
   result[0..default.high] = default
@@ -335,6 +331,12 @@ proc pushString*(str: var string, val: string) =
     str[0..val.len] = val & '\0'
   else:
     str[0..str.high] = val[0..str.high]
+
+proc getData*(app: App, path: string): string = 
+  app.res.getData(path)
+
+proc getData*(app: App, node: PrefsNode): string = 
+  app.res.getData(node.getString())
 
 proc formatTime*(ms: int64, includeMs: bool = true): string = 
   var
@@ -406,3 +408,15 @@ proc vInputInt*(label: cstring, val: var int32, step: int32 = 1, min: int32 = 0,
     igPopDisabled()
   
   igEndGroup()
+
+proc updatePrefs*(app: var App) = 
+  if app.prefs["alarmPath"].getString().len > 0:
+    if app.prefs["alarmPath"].getString().fileExists():
+      try:
+        app.alarmSound = loadSoundFile(app.prefs["alarmPath"].getString())
+      except SoundError:
+        notifyPopup("Could not load alarm", getCurrentExceptionMsg(), "error")
+    else:
+      notifyPopup("Could not find alarm", "Could not find " & app.prefs["alarmPath"].getString(), "warning")
+  else: # Load default alarm
+    app.alarmSound = loadSoundBytes(app.config["alarmPath"].getString(), app.getData(app.config["alarmPath"]))

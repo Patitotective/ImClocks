@@ -1,11 +1,11 @@
-import std/strutils
+import std/[strutils, os]
 
 import niprefs
 import nimgl/imgui
 import tinydialogs
 import niprefs/utils as prefsUtils
 
-import utils
+import utils, icons
 
 proc drawSettings(app: var App, settings: PrefsNode, alignCount: Natural, parent = "")
 
@@ -31,7 +31,7 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
   of Input:
     let
       flags = getFlags[ImGuiInputTextFlags](data["flags"])
-      text = app.getCacheVal(.getString()
+      text = app.getCacheVal().getString()
 
     var buffer = newString(data["max"].getInt())
     buffer[0..text.high] = text
@@ -39,12 +39,12 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
     if igInputTextWithHint(cstring "##" & name, if "hint" in data: data["hint"].getString().cstring else: "".cstring, buffer.cstring, data["max"].getInt().uint, flags):
       app.addToCache(buffer.newPString())
   of Check:
-    var checked = app.getCacheVal(.getBool()
+    var checked = app.getCacheVal().getBool()
     if igCheckbox(cstring "##" & name, checked.addr):
       app.addToCache(checked.newPBool())
   of Slider:
     let flags = getFlags[ImGuiSliderFlags](data["flags"])
-    var val = app.getCacheVal(.getInt().int32
+    var val = app.getCacheVal().getInt().int32
     
     if igSliderInt(
       cstring "##" & name, 
@@ -57,7 +57,7 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
       app.addToCache(val.newPInt())
   of FSlider:
     let flags = getFlags[ImGuiSliderFlags](data["flags"])
-    var val: float32 = app.getCacheVal(.getFloat()
+    var val: float32 = app.getCacheVal().getFloat()
     
     if igSliderFloat(
       cstring "##" & name, 
@@ -70,7 +70,7 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
       app.addToCache(val.newPFloat())
   of Spin:
     let flags = getFlags[ImGuiInputTextFlags](data["flags"])
-    var val = app.getCacheVal(.getInt().int32
+    var val = app.getCacheVal().getInt().int32
     
     if igInputInt(
       cstring "##" & name, 
@@ -82,7 +82,7 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
       app.addToCache(val.newPInt())
   of FSpin:
     let flags = getFlags[ImGuiInputTextFlags](data["flags"])
-    var val = app.getCacheVal(.getFloat().float32
+    var val = app.getCacheVal().getFloat().float32
     
     if igInputFloat(
       cstring "##" & name, 
@@ -95,10 +95,10 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
       app.addToCache(val.newPFloat())
   of Combo:
     let flags = getFlags[ImGuiComboFlags](data["flags"])
-    var currentItem = app.getCacheVal(
+    var currentItem = app.getCacheVal()
 
     if currentItem.kind == PInt:
-      currentItem = data["items"][currentItem.getInt()]
+      currentItem = data["items"][int currentItem.getInt()]
 
     if igBeginCombo(cstring "##" & name, currentItem.getString().cstring, flags):
 
@@ -114,10 +114,10 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
   of Radio:
     var currentItem: int32
 
-    if app.getCacheVal(.kind == PString:
-      currentItem = data["items"].getSeq().find(app.getCacheVal(.getString()).int32
+    if app.getCacheVal().kind == PString:
+      currentItem = data["items"].getSeq().find(app.getCacheVal().getString()).int32
     else:
-      currentItem = app.getCacheVal(.getInt().int32
+      currentItem = app.getCacheVal().getInt().int32
 
     for e, i in data["items"].getSeq():
       if igRadioButton(i.getString().cstring, currentItem.addr, e.int32):
@@ -127,7 +127,7 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
         igSameLine()
   of Color3:
     let flags = getFlags[ImGuiColorEditFlags](data["flags"])
-    var col = app.getCacheVal(.parseColor3()
+    var col = app.getCacheVal().parseColor3()
 
     if igColorEdit3(cstring "##" & name, col, flags):
       var color = newPSeq()
@@ -137,7 +137,7 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
       app.addToCache(color)
   of Color4:
     let flags = getFlags[ImGuiColorEditFlags](data["flags"])
-    var col = app.getCacheVal(.parseColor4()
+    var col = app.getCacheVal().parseColor4()
     
     if igColorEdit4(cstring "##" & name, col, flags):
       var color = newPSeq()
@@ -146,12 +146,13 @@ proc drawSetting(app: var App, name: string, data: PObjectType, alignCount: Natu
       color.add col[2].newPFloat()
       color.add col[3].newPFloat()
       app.addToCache(color)
-  of File:
-    igPushDisabled()
-    igInputText(cstring "##" & name, app.getCacheVal()
-    igPopDisabled()
-    if igIsItemClicked(flags = AllowDisabled):
-      echo "choose"
+  of ChooseFile:
+    igInputTextWithHint(cstring "##" & name, if "hint" in data: data["hint"].getString().cstring else: "Default".cstring, cstring app.getCacheVal().getString(), 100, flags = ImGuiInputTextFlags.ReadOnly)
+    igSameLine()
+    if (igIsItemHovered(flags = AllowWhenDisabled) and igIsMouseDoubleClicked(ImGuiMouseButton.Left)) or igButton("Choose " & FA_FolderOpen):
+      if (let path = openFileDialog("Open File", getCurrentDir() / "\0", ["*.ogg"], "OGG Sound Files"); path.strip().len > 0):
+        app.addToCache(path.newPString())
+
   of Section:
     let flags = getFlags[ImGuiTreeNodeFlags](data["flags"])
     if igCollapsingHeader(label.cstring, flags):
@@ -200,7 +201,8 @@ proc drawPrefsModal*(app: var App) =
     if igButton("Save"):
       for name, val in app.cache:
         app.prefs[name] = val
-
+      
+      app.updatePrefs()
       igCloseCurrentPopup()
     
     igSameLine()
@@ -228,6 +230,8 @@ proc drawPrefsModal*(app: var App) =
         app.prefs.overwrite()
         app.initConfig(app.config["settings"])
         app.cache = default PObjectType
+        app.updatePrefs()
+
         igCloseCurrentPopup()
 
       igSameLine()

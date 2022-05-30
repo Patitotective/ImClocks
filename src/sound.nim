@@ -62,7 +62,3 @@ proc `paused=`*(v: Voice, value: bool) {.inline.} = so.SoloudSetPause(v.cuint, v
 proc `volume=`*(v: Voice, value: float32) {.inline.} = so.SoloudSetVolume(v.cuint, value)
 proc `pitch=`*(v: Voice, value: float32) {.inline.} = discard so.SoloudSetRelativePlaySpeed(v.cuint, value)
 proc `pan=`*(v: Voice, value: float32) {.inline.} = so.SoloudSetPan(v.cuint, value)
-
-# loadSoundFile("../assets/alarm.ogg").play()
-# loadSoundBytes("../assets/alarm.ogg", readFile("../assets/alarm.ogg")).play()
-# sleep(5000)

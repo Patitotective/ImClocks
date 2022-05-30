@@ -5,26 +5,17 @@ import imstyle
 import niprefs
 import stopwatch
 import timezones
+import tinydialogs
 import nimgl/[opengl, glfw]
 import nimgl/imgui, nimgl/imgui/[impl_opengl, impl_glfw]
 
+import resourcesdata
 import src/[prefsmodal, utils, icons, sound]
-when defined(release):
-  from resourcesdata import resources
 
 const
   configPath = "config.niprefs"
   red = "#ED333B".parseHtmlColor()
   blue = "#3584E4".parseHtmlColor()
-
-proc getData(path: string): string = 
-  when defined(release):
-    resources[path]
-  else:
-    readFile(path)
-
-proc getData(node: PrefsNode): string = 
-  node.getString().getData()
 
 proc getCacheDir(app: App): string = 
   getCacheDir(app.config["name"].getString())
@@ -38,7 +29,7 @@ proc drawAboutModal(app: App) =
   if igBeginPopupModal(cstring "About " & app.config["name"].getString(), unusedOpen.unsafeAddr, flags = makeFlags(ImGuiWindowFlags.NoResize)):
     # Display icon image
     var texture: GLuint
-    var image = app.config["iconPath"].getData().readImageFromMemory()
+    var image = app.getData(app.config["iconPath"]).readImageFromMemory()
 
     image.loadTextureFromData(texture)
 
@@ -86,9 +77,12 @@ proc drawAddTzModal(app: var App) =
   getCenterNonUDT(center.addr, igGetMainViewport())
   igSetNextWindowPos(center, Always, igVec2(0.5f, 0.5f))
 
-  if igBeginPopupModal("Add Timezone", flags = makeFlags(AlwaysAutoResize)):
+  let unusedOpen = true
+  if igBeginPopupModal("Add Timezone", unusedOpen.unsafeAddr, flags = makeFlags(AlwaysAutoResize)):
     let items = getDefaultTzDb().tzNames.sorted
     app.filter.addr.draw("##filter")
+    if igIsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) and not igIsAnyItemActive() and not igIsMouseClicked(ImGuiMouseButton.Left):
+      igSetKeyboardFocusHere()
 
     if igBeginListBox("##timezones"):
       for e, item in items:
@@ -106,11 +100,6 @@ proc drawAddTzModal(app: var App) =
     if igButton("Add"):
       if items[app.currentZone].newPString() notin app.prefs["timezones"].getSeq():
         app.prefs["timezones"] = app.prefs["timezones"].getSeq() & items[app.currentZone].newPString()
-      igCloseCurrentPopup()
-
-    igSameLine()
-
-    if igButton("Cancel"):
       igCloseCurrentPopup()
 
     igEndPopup()
@@ -137,6 +126,9 @@ proc drawWorldTab(app: var App) =
       if igSelectable(cstring &"{name.getString()}: {utc}", selected == e):
         selected = e
 
+      if igIsItemHovered():
+        igSetTooltip(cstring dt.format("yyyy-MM-dd 'UTC'zz"))
+
       if igBeginPopupContextItem():
         if igButton(FA_TrashO & " Remove"):
           app.prefs["timezones"] = app.prefs["timezones"].deleted(e)
@@ -144,12 +136,9 @@ proc drawWorldTab(app: var App) =
 
       igSameLine()
 
-      centerCursorX(igCalcTextSize(cstring dt.getClockStr()).x, 1)
+      centerCursorX(igCalcTextSize(cstring dt.getClockStr()).x + (style.framePadding.x * 2), 1)
 
       igText(cstring dt.getClockStr())
-
-      if igIsItemHovered():
-        igSetTooltip(cstring dt.format("yyyy-MM-dd 'UTC'zz"))
 
     if app.prefs["timezones"].getSeq().len == 0:
       igText("No timezones")
@@ -397,6 +386,7 @@ proc drawTimerRunning(app: var App) =
     if app.playAlarm:
       app.playAlarm = false
       app.alarmVoice = app.alarmSound.play(volume = app.prefs["alarmVol"].getFloat(), loop = app.prefs["loopAlarm"].getBool())
+      notifyPopup("Timer", "Time is over", "info")
 
     app.drawTimerEnd()
   else:
@@ -442,7 +432,7 @@ proc drawMainMenuBar(app: var App) =
       igEndMenu()
 
     if igBeginMenu("About"):
-      if igMenuItem("Website " & FA_Heart):
+      if igMenuItem("Website " & FA_ExternalLink):
         app.config["website"].getString().openURL()
 
       igMenuItem(cstring  "About " & app.config["name"].getString(), shortcut = nil, p_selected = openAbout.addr)
@@ -535,7 +525,7 @@ proc initWindow(app: var App) =
     quit(-1)
 
   # Set the window icon
-  var icon = initGLFWImage(app.config["iconPath"].getData().readImageFromMemory())
+  var icon = initGLFWImage(app.getData(app.config["iconPath"]).readImageFromMemory())
   app.win.setWindowIcon(1, icon.addr)
 
   app.win.setWindowSizeLimits(app.config["minSize"][0].getInt().int32, app.config["minSize"][1].getInt().int32, GLFW_DONT_CARE, GLFW_DONT_CARE) # minWidth, minHeight, maxWidth, maxHeight
@@ -548,8 +538,8 @@ proc initWindow(app: var App) =
 
     monitors[0].getMonitorPos(monitorX.addr, monitorY.addr)
     app.win.setWindowPos(
-      monitorX + int32((videoMode.width - app.prefs["win/width"].getInt()) / 2), 
-      monitorY + int32((videoMode.height - app.prefs["win/height"].getInt()) / 2)
+      monitorX + int32((videoMode.width - int app.prefs["win/width"].getInt()) / 2), 
+      monitorY + int32((videoMode.height - int app.prefs["win/height"].getInt()) / 2)
     )
   else:
     app.win.setWindowPos(app.prefs["win/x"].getInt().int32, app.prefs["win/y"].getInt().int32)
@@ -565,12 +555,18 @@ proc initPrefs(app: var App) =
     }
   }).initPrefs((app.getCacheDir() / app.config["name"].getString()).changeFileExt("niprefs"))
 
-proc initApp(config: PObjectType): App = 
-  result = App(config: config, sw: stopwatch(), swState: Stopped, startBtnText: "Start " & FA_Play, lapBtnText: "Lap", timerState: Stopped, playAlarm: true)
+proc initApp(): App = 
+  result = App(
+    config: resources.getData(configPath).parsePrefs(), 
+    res: resources, 
+    sw: stopwatch(), swState: Stopped, 
+    startBtnText: "Start " & FA_Play, lapBtnText: "Lap", 
+    timerState: Stopped, playAlarm: true
+  )
   result.initPrefs()
   result.initConfig(result.config["settings"])
   initAudio()
-  result.alarmSound = loadSoundBytes(result.config["alarmPath"].getString(), result.config["alarmPath"].getData())
+  result.updatePrefs()
 
 proc terminate(app: var App) = 
   var x, y, width, height: int32
@@ -584,7 +580,7 @@ proc terminate(app: var App) =
   app.prefs["win/height"] = height
 
 proc main() =
-  var app = initApp(configPath.getData().parsePrefs())
+  var app = initApp()
 
   # Setup Window
   doAssert glfwInit()
@@ -601,26 +597,26 @@ proc main() =
   io.iniFilename = nil # Disable .ini config file
 
   # Setup Dear ImGui style using ImStyle
-  setIgStyle(app.config["stylePath"].getData().parsePrefs())
+  setIgStyle(app.getData(app.config["stylePath"]).parsePrefs())
 
   # Setup Platform/Renderer backends
   doAssert igGlfwInitForOpenGL(app.win, true)
   doAssert igOpenGL3Init()
 
   # Load fonts
-  app.font = io.fonts.igAddFontFromMemoryTTF(app.config["fontPath"].getData(), app.config["fontSize"].getFloat())
+  app.font = io.fonts.igAddFontFromMemoryTTF(app.getData(app.config["fontPath"]), app.config["fontSize"].getFloat())
 
   # Merge ForkAwesome icon font
   var config = utils.newImFontConfig(mergeMode = true)
   var ranges = [FA_Min.uint16,  FA_Max.uint16]
 
-  io.fonts.igAddFontFromMemoryTTF(app.config["iconFontPath"].getData(), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
+  io.fonts.igAddFontFromMemoryTTF(app.getData(app.config["iconFontPath"]), app.config["fontSize"].getFloat(), config.addr, ranges[0].addr)
 
   # Add big font
-  app.bigFont = io.fonts.igAddFontFromMemoryTTF(app.config["fontPath"].getData(), app.config["fontSize"].getFloat()+10)
+  app.bigFont = io.fonts.igAddFontFromMemoryTTF(app.getData(app.config["fontPath"]), app.config["fontSize"].getFloat()+10)
 
   # Merge the big font with the icon font
-  io.fonts.igAddFontFromMemoryTTF(app.config["iconFontPath"].getData(), app.config["fontSize"].getFloat()+6, config.addr, ranges[0].addr)
+  io.fonts.igAddFontFromMemoryTTF(app.getData(app.config["iconFontPath"]), app.config["fontSize"].getFloat()+6, config.addr, ranges[0].addr)
 
   # Main loop
   while not app.win.windowShouldClose:
