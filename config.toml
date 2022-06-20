@@ -1,0 +1,39 @@
+# App
+name = "ImClocks"
+comment = "ImClocks is a simple clocks application written in Nim"
+version = "0.2.0"
+website = "https://github.com/Patitotective/ImTemplate"
+authors = ["Patitotective <https://github.com/Patitotective>"]
+categories = ["Utility"]
+
+# AppImage
+ghRepo = "Patitotective/ImClocks"
+
+stylePath = "assets/style.toml"
+iconPath = "assets/icon.png"
+svgIconPath = "assets/icon.svg"
+iconFontPath = "assets/forkawesome-webfont.ttf"
+fontPath = "assets/ProggyVector Regular.ttf" # Other options are Roboto-Regular.ttf, Cousine-Regular.ttf or Karla-Regular.ttf
+fontSize = 18.0
+alarmPath = "assets/alarm.ogg"
+
+# Window
+minSize = [500, 300] # Width, height
+
+[settings.alarmPath]
+display = "Alarm path"
+type = "choosefile"
+hint = "Default alarm"
+default = ""
+[settings.alarmVol]
+display = "Alarm volume"
+type = "fslider" # For floats
+default = 2.5
+min = 0.0
+max = 10.0
+format = "%.1f"
+flags = "None" # See https://nimgl.dev/docs/imgui.html#ImGuiSliderFlags
+[settings.loopAlarm]
+display = "Loop alarm"
+type = "check"
+default = true
