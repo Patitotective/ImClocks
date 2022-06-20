@@ -1,6 +1,6 @@
 # <img title="Icon" width=50 height=50 src="https://github.com/Patitotective/ImClocks/blob/main/assets/icon.svg"></img> ImClocks
 Simple Dear ImGui clocks application written in Nim.  
-![Main window](/screenshots/main.png) 
+![Stopwatch tab](https://user-images.githubusercontent.com/79225325/174630202-3dd2b934-b050-480d-9158-32af6a226e63.png)
 
 ## Features
 - Add, sort and remove timezones.
@@ -18,11 +18,11 @@ You can also install it through nimble as a binary package.
 nimble install https://github.com/Patitotective/ImClocks
 ```
 
-![Video](/screenshots/video.mp4)
+https://user-images.githubusercontent.com/79225325/174630096-ef22ac02-21d4-4c89-b440-219ceb9991e2.mp4
 
 ## About
 - Alarm sound: https://bigsoundbank.com/detail-0035-electronic-alarm-buzzer-1.html.
-- GitHub: https://github.com/Patitotective/ImPasswordGen.
+- GitHub: https://github.com/Patitotective/ImClocks.
 - Discord: https://discord.gg/as85Q4GnR6.
 
 Contact me:
