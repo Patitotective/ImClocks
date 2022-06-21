@@ -9,7 +9,7 @@ Simple Dear ImGui clocks application written in Nim.
 
 ## Installation
 Go to the [releases page](https://github.com/Patitotective/ImClocks/releases/latest) and download:
-- [ImClocks-0.2.0-amd64.AppImage](https://github.com/Patitotective/ImClocks/releases/latest/download/ImClocks-0.2.0-amd64.AppImage]) for Linux.
+- [ImClocks-0.2.0-amd64.AppImage](https://github.com/Patitotective/ImClocks/releases/latest/download/ImClocks-0.2.0-amd64.AppImage) for Linux.
 - [ImClocks-0.2.0-amd64.exe](https://github.com/Patitotective/ImClocks/releases/latest/download/ImClocks-0.2.0-amd64.exe) for Windows.
 
 ### Nimble

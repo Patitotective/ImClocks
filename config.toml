@@ -2,7 +2,7 @@
 name = "ImClocks"
 comment = "ImClocks is a simple clocks application written in Nim"
 version = "0.2.0"
-website = "https://github.com/Patitotective/ImTemplate"
+website = "https://github.com/Patitotective/ImClocks"
 authors = ["Patitotective <https://github.com/Patitotective>"]
 categories = ["Utility"]
 
