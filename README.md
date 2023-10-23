@@ -23,7 +23,7 @@ https://user-images.githubusercontent.com/79225325/174630096-ef22ac02-21d4-4c89-
 ## About
 - Alarm sound: https://bigsoundbank.com/detail-0035-electronic-alarm-buzzer-1.html.
 - GitHub: https://github.com/Patitotective/ImClocks.
-- Discord: https://discord.gg/gdcPVjazCG.
+- Discord: https://discord.gg/U23ZQMsvwc.
 
 Contact me:
 - Discord: **Patitotective#0127**.
